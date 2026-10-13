@@ -29,7 +29,14 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.io.IOException;
 import java.math.BigInteger;
+import java.net.URISyntaxException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -92,5 +99,104 @@ public class TestJson {
 		assertEquals(Arrays.asList(1, 2), JsonValues.list(Arrays.asList(1L, 2L), "x", JsonValues::integer));
 		JsonException e = assertThrows(JsonException.class, ()->JsonValues.list(Arrays.asList(1L, "a"), "ids", JsonValues::integer));
 		assertTrue(e.getMessage().startsWith("ids[1]"), e.getMessage());
+	}
+
+	@Test
+	public void rejectsHugeNumbers() throws Exception {
+		String digits = "9".repeat(Json.MAX_NUMBER_LENGTH+1);
+		long start = System.nanoTime();
+		assertThrows(JsonException.class, ()->Json.parse(digits));
+		assertThrows(JsonException.class, ()->Json.parse("1"+"0".repeat(1_000_000)));
+		assertThrows(JsonException.class, ()->Json.parse("0."+"0".repeat(Json.MAX_NUMBER_LENGTH)));
+		assertTrue(System.nanoTime()-start < 2_000_000_000L, "should fail fast");
+		assertEquals(new BigInteger("9".repeat(Json.MAX_NUMBER_LENGTH)), Json.parse("9".repeat(Json.MAX_NUMBER_LENGTH)));
+	}
+
+	@Test
+	public void rejectsNumbersOutOfRange() {
+		for(String bad : new String[] {"1e400", "-1e400", "[1E999]", "{\"a\":1e309}"}) {
+			assertThrows(JsonException.class, ()->Json.parse(bad), bad);
+		}
+	}
+
+	@Test
+	public void rejectsRepeatedMemberNames() throws Exception {
+		JsonException e = assertThrows(JsonException.class, ()->Json.parse("{\"a\":1,\"a\":2}"));
+		assertEquals(7, e.getPosition());
+		assertThrows(JsonException.class, ()->Json.parse("{\"a\":{\"b\":1,\"c\":2,\"b\":null}}"));
+		// the same name in different objects is fine
+		assertEquals(2, ((Map<?,?>) Json.parse("{\"a\":{\"x\":1},\"b\":{\"x\":2}}")).size());
+	}
+
+	@Test
+	public void writeRejectsNullMemberName() {
+		Map<String,Object> m = new LinkedHashMap<>();
+		m.put(null, 1);
+		assertThrows(IllegalArgumentException.class, ()->Json.write(m));
+	}
+
+	@Test
+	public void writeEscapesLoneSurrogates() throws Exception {
+		assertEquals("\"\\ud800\"", Json.write("\uD800"));
+		assertEquals("\"\\udc00\"", Json.write("\uDC00"));
+		assertEquals("\"a\\udc00\\ud800b\"", Json.write("a\uDC00\uD800b"));
+		assertEquals("\"\uD83D\uDE00\"", Json.write("\uD83D\uDE00"));
+		// and what's written reads back
+		assertEquals("a\uDC00\uD800b", Json.parse(Json.write("a\uDC00\uD800b")));
+	}
+
+	@Test
+	public void acceptsOnlyAsciiDigits() {
+		for(String bad : new String[] {"1\u0663", "\u0663", "-\u0663", "1.\u0663", "1e\u0663", "\"\\u\u0663\u0663\u0663\u0663\"",
+				"\"\\u00\u0665\u0665\"", "\"\\u\uff11\uff11\uff11\uff11\""}) {
+			assertThrows(JsonException.class, ()->Json.parse(bad), bad);
+		}
+	}
+
+	@Test
+	public void errorsHaveLineAndColumn() {
+		JsonException e = assertThrows(JsonException.class, ()->Json.parse("{\n  \"a\": 1,\n  \"b\" 2\n}"));
+		assertEquals(3, e.getLine());
+		assertEquals(7, e.getColumn());
+		assertEquals(e.getPosition(), "{\n  \"a\": 1,\n  \"b\" ".length());
+		assertTrue(e.getMessage().contains("line 3, column 7"), e.getMessage());
+		e = assertThrows(JsonException.class, ()->Json.parse("[1,]"));
+		assertEquals(1, e.getLine());
+		assertEquals(4, e.getColumn());
+		assertEquals(-1, new JsonException("x").getLine());
+	}
+
+	/** nst/JSONTestSuite: y_ must parse, n_ must be a JsonException, i_ (implementation defined) mustn't blow up. */
+	@Test
+	public void jsonTestSuite() throws IOException, URISyntaxException {
+		Path dir = Paths.get(getClass().getResource("/JSONTestSuite/test_parsing").toURI());
+		// Valid JSON, but this reader rejects repeated member names on purpose.
+		List<String> repeatedKeys = Arrays.asList("y_object_duplicated_key.json", "y_object_duplicated_key_and_value.json");
+		List<String> failures = new ArrayList<>();
+		int count = 0;
+		try (var files = Files.list(dir)) {
+			for(Path f : (Iterable<Path>) files.sorted()::iterator) {
+				String name = f.getFileName().toString();
+				if( !name.endsWith(".json")) {
+					continue;
+				}
+				count++;
+				String text = new String(Files.readAllBytes(f), StandardCharsets.UTF_8);
+				try {
+					Json.parse(text);
+					if( name.startsWith("n_") || repeatedKeys.contains(name)) {
+						failures.add(name+" was accepted");
+					}
+				} catch (JsonException e) {
+					if( name.startsWith("y_") && !repeatedKeys.contains(name)) {
+						failures.add(name+" was rejected: "+e.getMessage());
+					}
+				} catch (RuntimeException | StackOverflowError e) {
+					failures.add(name+" threw "+e);
+				}
+			}
+		}
+		assertTrue(count > 300, "only found "+count+" files");
+		assertTrue(failures.isEmpty(), failures.toString());
 	}
 }

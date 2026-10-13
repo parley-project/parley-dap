@@ -53,6 +53,9 @@ public final class Json {
 	/** Deepest nesting accepted when reading (a guard against stack overflow on hostile input). */
 	public static final int MAX_DEPTH = 512;
 
+	/** Longest number, in characters, accepted when reading (BigInteger parsing is quadratic in the length). */
+	public static final int MAX_NUMBER_LENGTH = 1000;
+
 	private Json() {
 	}
 
@@ -92,7 +95,21 @@ public final class Json {
 		}
 
 		JsonException error(String msg) {
-			return new JsonException(msg+" at position "+pos, pos);
+			return error(msg, pos);
+		}
+
+		JsonException error(String msg, int at) {
+			int line = 1;
+			int column = 1;
+			for(int i=0; i < at && i < s.length(); i++) {
+				if( s.charAt(i) == '\n' ) {
+					line++;
+					column = 1;
+				} else {
+					column++;
+				}
+			}
+			return new JsonException(msg+" at line "+line+", column "+column+" (position "+at+")", at, line, column);
 		}
 
 		void skipSpace() {
@@ -149,6 +166,7 @@ public final class Json {
 				if( pos >= s.length() || s.charAt(pos) != '"') {
 					throw error("Expected a member name");
 				}
+				int namePos = pos;
 				String name = string();
 				skipSpace();
 				if( pos >= s.length() || s.charAt(pos) != ':') {
@@ -156,6 +174,9 @@ public final class Json {
 				}
 				pos++;
 				skipSpace();
+				if( ret.containsKey(name)) {
+					throw error("Repeated member name \""+name+"\"", namePos);
+				}
 				ret.put(name, value(depth+1));
 				skipSpace();
 				if( pos >= s.length()) {
@@ -240,7 +261,8 @@ public final class Json {
 						}
 						int v = 0;
 						for(int i=0; i < 4; i++) {
-							int d = Character.digit(s.charAt(pos+i), 16);
+							char h = s.charAt(pos+i);
+						int d = h >= '0' && h <= '9' ? h-'0' : h >= 'a' && h <= 'f' ? h-'a'+10 : h >= 'A' && h <= 'F' ? h-'A'+10 : -1;
 							if( d < 0 ) {
 								throw error("Bad \\u escape");
 							}
@@ -271,7 +293,7 @@ public final class Json {
 			if( s.charAt(pos) == '0') {
 				pos++;
 			} else if( s.charAt(pos) >= '1' && s.charAt(pos) <= '9') {
-				while( pos < s.length() && Character.isDigit(s.charAt(pos))) {
+				while( pos < s.length() && s.charAt(pos) >= '0' && s.charAt(pos) <= '9') {
 					pos++;
 				}
 			} else {
@@ -303,6 +325,9 @@ public final class Json {
 					throw error("Bad number");
 				}
 			}
+				if( pos-start > MAX_NUMBER_LENGTH ) {
+				throw error("Number longer than "+MAX_NUMBER_LENGTH+" characters", start);
+			}
 			String text = s.substring(start, pos);
 			if( integer ) {
 				if( text.length() < 19 ) {
@@ -311,7 +336,11 @@ public final class Json {
 				BigInteger big = new BigInteger(text);
 				return big.bitLength() < 64 ? (Object) big.longValue() : big;
 			}
-			return Double.parseDouble(text);
+			double d = Double.parseDouble(text);
+			if( Double.isInfinite(d)) {
+				throw error("Number out of range", start);
+			}
+			return d;
 		}
 	}
 
@@ -361,7 +390,10 @@ public final class Json {
 					b.append(',');
 				}
 				first = false;
-				quote(b, String.valueOf(e.getKey()));
+				if( e.getKey() == null ) {
+					throw new IllegalArgumentException("JSON object member names can't be null");
+				}
+				quote(b, e.getKey().toString());
 				b.append(':');
 				write(b, e.getValue(), depth+1);
 			}
@@ -408,6 +440,9 @@ public final class Json {
 			default:
 				// control characters, and the line separators JavaScript can't take in a string
 				if( c < 0x20 || c == ' ' || c == ' ') {
+					b.append(String.format("\\u%04x", (int) c));
+				} else if( Character.isSurrogate(c) && !(Character.isHighSurrogate(c) ? i+1 < n && Character.isLowSurrogate(s.charAt(i+1)) : i > 0 && Character.isHighSurrogate(s.charAt(i-1)))) {
+					// a lone surrogate has no UTF-8 form
 					b.append(String.format("\\u%04x", (int) c));
 				} else {
 					b.append(c);
