@@ -31,10 +31,18 @@ public class JsonException extends IOException {
 
 	private static final long serialVersionUID = 1L;
 	private final int position;
+	private final int line;
+	private final int column;
 
 	public JsonException(String message, int position) {
+		this(message, position, -1, -1);
+	}
+
+	public JsonException(String message, int position, int line, int column) {
 		super(message);
 		this.position = position;
+		this.line = line;
+		this.column = column;
 	}
 
 	public JsonException(String message) {
@@ -44,5 +52,15 @@ public class JsonException extends IOException {
 	/** Where in the text the problem is, or -1. */
 	public int getPosition() {
 		return position;
+	}
+
+	/** The line (counting from 1) of the problem, or -1. */
+	public int getLine() {
+		return line;
+	}
+
+	/** The column (counting from 1) of the problem, or -1. */
+	public int getColumn() {
+		return column;
 	}
 }
