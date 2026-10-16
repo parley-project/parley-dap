@@ -53,10 +53,25 @@ import us.bringardner.parley.dap.protocol.SteppingGranularity;
 /** The generated protocol classes: up to date with the schema, and their JSON. */
 public class TestGenerated {
 
+	/**
+	 * The project folder (the one with pom.xml), found by walking up from where the test classes are,
+	 * so the check works from any working directory and whatever the build's output folder is called.
+	 */
+	private static Path projectDir() throws Exception {
+		Path dir = Paths.get(TestGenerated.class.getProtectionDomain().getCodeSource().getLocation().toURI());
+		for(Path d = dir; d != null; d = d.getParent()) {
+			if( Files.isRegularFile(d.resolve("pom.xml")) ) {
+				return d;
+			}
+		}
+		throw new IllegalStateException("no pom.xml above "+dir);
+	}
+
 	@Test
 	public void generatedSourcesMatchTheSchema() throws Exception {
-		Map<String,String> want = DapGenerator.generate(Files.readString(Paths.get("schema/debugAdapterProtocol.json")));
-		Path dir = Paths.get("src/main/java/us/bringardner/parley/dap/protocol");
+		Path project = projectDir();
+		Map<String,String> want = DapGenerator.generate(Files.readString(project.resolve("schema/debugAdapterProtocol.json")));
+		Path dir = project.resolve("src/main/java/us/bringardner/parley/dap/protocol");
 		Set<String> have = new TreeSet<>();
 		try(java.util.stream.Stream<Path> s = Files.list(dir)) {
 			s.forEach(p -> have.add(p.getFileName().toString()));
