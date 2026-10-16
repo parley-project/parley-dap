@@ -67,7 +67,6 @@ import us.bringardner.parley.net.nio.INioHandlerFactory;
 public class DapNioHandler implements INioHandler {
 
 	private final Function<IDebugClient,IDebugAdapter> adapterFactory;
-	private final IDebugClient clientHandler;
 	private volatile INioConnection connection;
 	private volatile DapEndpoint endpoint;
 	private volatile IDebugAdapter adapter;
@@ -77,7 +76,6 @@ public class DapNioHandler implements INioHandler {
 
 	private DapNioHandler(Function<IDebugClient,IDebugAdapter> adapterFactory, IDebugClient clientHandler) {
 		this.adapterFactory = adapterFactory;
-		this.clientHandler = clientHandler;
 		DapEndpoint ep = new DapEndpoint(this::send, null);
 		ep.setErrorListener(e -> errorListener.accept(e));
 		endpoint = ep;
